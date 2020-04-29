@@ -4,9 +4,9 @@
 #include <time.h>
 #include "list_utils.h"
 
-#define SIZE 1000
+#define SIZE 10000000
 #define INT_MAX 2147483647
-#define DEBUG 1
+#define DEBUG 0
 
 void randNumbers(int* numbers){
   int i;
@@ -19,6 +19,21 @@ void randNumbers(int* numbers){
     {
       numbers[i] = (int) rand_r(&myseed)%200000;
     }
+  }
+}
+
+void validateIfSorted(int* numbers){
+  int i;
+  int res = 1;
+   #pragma omp parallel for shared(res) private(i)
+   for(i=0; i<SIZE-1; i++)
+    {
+      if (numbers[i+1] - numbers[i] < 0){
+        res *= 0;
+      }
+    }
+  if(res == 0){
+    printf("Number are not sorted properly! :\()");
   }
 }
 
@@ -116,7 +131,7 @@ void writeBucketsIntoFinalTable(int startBucket, int endBucket,Node** buckets,in
 int main(int argc, char *argv[])
 {
     long i;
-    double start, end;
+    double start, end, rand_start, rand_end, sort_start, sort_end, split_start, split_end, rewrite_start, rewrite_end;
     float bucketSize;
 
     int* numbers = (int*) calloc(SIZE,sizeof(int));
@@ -130,7 +145,9 @@ int main(int argc, char *argv[])
 
     start = omp_get_wtime();
 
+    rand_start = omp_get_wtime();
     randNumbers(numbers);
+    rand_end = omp_get_wtime();
 
     float min=(float) findMin(numbers, 0, SIZE);
     float max=(float) findMax(numbers, 0, SIZE);
@@ -156,17 +173,27 @@ int main(int argc, char *argv[])
 
         if (DEBUG) printf("Thread no: %d / %d, start point: %ld, end point: %ld\n", id, n_threads - 1, sp, sp+ppt-1);
 
+        split_start = omp_get_wtime();
         splitIntoBuckets(sp, sp+ppt, numbers, buckets, bucketSize, min, locks);
+        split_end = omp_get_wtime();
 
         #pragma omp barrier
+
+        sort_start = omp_get_wtime();
         sortBuckets(sp, sp + ppt, buckets);
+        sort_end = omp_get_wtime();
 
         findNumberOfItems(sp, sp+ppt, buckets, bucketsSizeInBunch);
 
         #pragma omp barrier
         setWritingOffset(n_threads, bucketsSizeInBunch);
 
+        rewrite_start = omp_get_wtime();
         writeBucketsIntoFinalTable(sp, sp+ppt, buckets, numbers, bucketsSizeInBunch);
+        rewrite_end = omp_get_wtime();
+
+        validateIfSorted(numbers);
+
     }
 
   end = omp_get_wtime();
@@ -179,6 +206,10 @@ int main(int argc, char *argv[])
      }
   }
 
+  printf("\nRand time is: %fs\n", rand_end - rand_start);
+  printf("\nSplit time is: %fs\n", split_end - split_start);
+  printf("\nSort time is: %fs\n", sort_end - sort_start);
+  printf("\nWrite time is: %fs\n", rewrite_end - rewrite_start);
   printf("\nTotal time is: %fs\n", end - start);
 
   free(numbers);
