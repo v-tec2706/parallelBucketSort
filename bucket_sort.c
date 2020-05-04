@@ -171,6 +171,9 @@ int main(int argc, char *argv[])
         ppt = (long)((SIZE + n_threads - 1) / n_threads);
         sp = id * ppt;
 
+        if (id == n_threads - 1)
+           ppt = SIZE - sp;
+
         if (DEBUG) printf("Thread no: %d / %d, start point: %ld, end point: %ld\n", id, n_threads - 1, sp, sp+ppt-1);
 
         split_start = omp_get_wtime();
@@ -180,7 +183,9 @@ int main(int argc, char *argv[])
         #pragma omp barrier
 
         sort_start = omp_get_wtime();
+
         sortBuckets(sp, sp + ppt, buckets);
+
         sort_end = omp_get_wtime();
 
         findNumberOfItems(sp, sp+ppt, buckets, bucketsSizeInBunch);
