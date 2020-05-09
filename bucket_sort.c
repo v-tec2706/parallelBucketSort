@@ -3,10 +3,13 @@
 #include <omp.h>
 #include <time.h>
 #include "list_utils.h"
+#include <locale.h>
 
-#define SIZE 10000000
+#define SIZE 1000
 #define INT_MAX 2147483647
-#define DEBUG 0
+#define DEBUG 1
+
+int BUCKETS_NUMBER;
 
 void randNumbers(int* numbers){
   int i;
@@ -17,7 +20,7 @@ void randNumbers(int* numbers){
   #pragma omp for schedule(auto) private(i)
    for(i=0; i<SIZE; i++)
     {
-      numbers[i] = (int) rand_r(&myseed)%200000;
+      numbers[i] = (int) rand_r(&myseed)%20000;
     }
   }
 }
@@ -33,7 +36,7 @@ void validateIfSorted(int* numbers){
       }
     }
   if(res == 0){
-    printf("Number are not sorted properly! :\()");
+    printf("Number are not sorted properly! :\()\n");
   }
 }
 
@@ -43,11 +46,11 @@ void splitIntoBuckets(int startBucket, int endBucket, int* numbers, Node** bucke
     int val = numbers[i];
     int relativeVal = val - min;
     int bucketNumber = (relativeVal / bucketSize) ;
-    if(bucketNumber >= SIZE){
-      bucketNumber = SIZE-1;
+    if(bucketNumber >= BUCKETS_NUMBER){
+      bucketNumber = BUCKETS_NUMBER-1;
     }
     omp_set_lock(&locks[bucketNumber]);
-    push( &buckets[bucketNumber%SIZE], val);
+    push( &buckets[bucketNumber%BUCKETS_NUMBER], val);
     omp_unset_lock(&locks[bucketNumber]);
   }
 }
@@ -130,16 +133,18 @@ void writeBucketsIntoFinalTable(int startBucket, int endBucket,Node** buckets,in
 
 int main(int argc, char *argv[])
 {
+    setlocale(LC_ALL, ".OCP");
+    BUCKETS_NUMBER = atoi(argv[1]);
     long i;
     double start, end, rand_start, rand_end, sort_start, sort_end, split_start, split_end, rewrite_start, rewrite_end;
     float bucketSize;
 
     int* numbers = (int*) calloc(SIZE,sizeof(int));
-    Node ** buckets = (Node**) calloc(SIZE, sizeof(struct Node*));
-    omp_lock_t* locks = (omp_lock_t*) calloc(SIZE, sizeof(omp_lock_t));
+    Node ** buckets = (Node**) calloc(BUCKETS_NUMBER, sizeof(struct Node*));
+    omp_lock_t* locks = (omp_lock_t*) calloc(BUCKETS_NUMBER, sizeof(omp_lock_t));
     int * bucketsSizeInBunch = (int*) calloc(omp_get_num_threads(), sizeof(int));
 
-    for (i = 0; i < SIZE; i++){
+    for (i = 0; i < BUCKETS_NUMBER; i++){
         omp_init_lock(&locks[i]);
     }
 
@@ -153,52 +158,69 @@ int main(int argc, char *argv[])
     float max=(float) findMax(numbers, 0, SIZE);
 
     int n_threads, id;
-    long ppt, sp;
+    long startingBucket, startingNumber, bucketPerThread, numbersPerThread;
 
-    #pragma omp parallel private(id, ppt, sp) \
+    #pragma omp parallel private(id, numbersPerThread, bucketPerThread, startingBucket, startingNumber) \
         shared(n_threads, buckets, numbers, max, min, bucketsSizeInBunch)
     {
 
         #pragma omp single
         {
-            bucketSize = (max-min) / SIZE;
+            bucketSize = (max-min) / BUCKETS_NUMBER;
             if (DEBUG) printf("\nmin: %.6f, max: %.6f, bucketSize: %.6f \n", min, max, bucketSize);
             n_threads = omp_get_num_threads();
         }
 
         id = omp_get_thread_num();
 
-        ppt = (long)((SIZE + n_threads - 1) / n_threads);
-        sp = id * ppt;
+        bucketPerThread = (long)((BUCKETS_NUMBER + n_threads - 1)
 
-        if (id == n_threads - 1)
-           ppt = SIZE - sp;
 
-        if (DEBUG) printf("Thread no: %d / %d, start point: %ld, end point: %ld\n", id, n_threads - 1, sp, sp+ppt-1);
+
+        / n_threads);
+        startingBucket = id * bucketPerThread;
+
+        numbersPerThread = (long)((SIZE + n_threads - 1) / n_threads);
+        startingNumber = id * numbersPerThread;
+
+        if (id == n_threads - 1){
+           bucketPerThread = BUCKETS_NUMBER - startingBucket;
+           numbersPerThread = SIZE - startingNumber;
+         }
+
+         #pragma omp single
+         {
+             if (DEBUG) printf("Buckets number %d, bucket per thread: %d", BUCKETS_NUMBER, bucketPerThread);
+         }
+
+        if (DEBUG) printf("Thread no: %d / %d, start point: %ld, end point: %ld\n", id, n_threads - 1, startingNumber, startingNumber+numbersPerThread-1);
+        if (DEBUG) printf("Thread no: %d / %d, start bucket: %ld, end bucket: %ld\n", id, n_threads - 1, startingBucket, startingBucket+bucketPerThread-1);
+
 
         split_start = omp_get_wtime();
-        splitIntoBuckets(sp, sp+ppt, numbers, buckets, bucketSize, min, locks);
+        splitIntoBuckets(startingNumber, startingNumber + numbersPerThread, numbers, buckets, bucketSize, min, locks);
         split_end = omp_get_wtime();
 
         #pragma omp barrier
 
         sort_start = omp_get_wtime();
 
-        sortBuckets(sp, sp + ppt, buckets);
+        sortBuckets(startingBucket, startingBucket + bucketPerThread, buckets);
 
         sort_end = omp_get_wtime();
 
-        findNumberOfItems(sp, sp+ppt, buckets, bucketsSizeInBunch);
+        findNumberOfItems(startingBucket, startingBucket + bucketPerThread, buckets, bucketsSizeInBunch);
 
         #pragma omp barrier
+
         setWritingOffset(n_threads, bucketsSizeInBunch);
 
         rewrite_start = omp_get_wtime();
-        writeBucketsIntoFinalTable(sp, sp+ppt, buckets, numbers, bucketsSizeInBunch);
+        writeBucketsIntoFinalTable(startingBucket, startingBucket + bucketPerThread, buckets, numbers, bucketsSizeInBunch);
+
         rewrite_end = omp_get_wtime();
 
         validateIfSorted(numbers);
-
     }
 
   end = omp_get_wtime();
@@ -207,10 +229,14 @@ int main(int argc, char *argv[])
     printf("\n");
     for(i=0; i<SIZE; i++)
      {
-       printf("%d ", numbers[i]);
+       printf("%d;", numbers[i]);
      }
   }
 
+
+
+  setlocale(LC_ALL, ".OCP");
+  // printf("%.6f;%.6f;%.6f;%.6f;%.6f\n",rand_end - rand_start,split_end - split_start, sort_end - sort_start,rewrite_end - rewrite_start,end - start);
   printf("\nRand time is: %fs\n", rand_end - rand_start);
   printf("\nSplit time is: %fs\n", split_end - split_start);
   printf("\nSort time is: %fs\n", sort_end - sort_start);
